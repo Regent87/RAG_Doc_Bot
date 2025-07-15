@@ -5,6 +5,7 @@
 - Поиск по технической документации
 - Используется модель meta-llama-3-8b-instruct
 - модель развернута на сервисе https://replicate.com/
+- Протестировать можно тут https://t.me/RogDocBot 
 
 
 
@@ -17,9 +18,9 @@ pip install -r requirements.txt
 в main.py установите свои токины:
 REPLICATE_API_TOKEN и BOT_TOKEN
 BOT_TOKEN для Tg бота
-REPLICATE_API_TOKEN для [сервиса с моделью](https://replicate.com/)
+REPLICATE_API_TOKEN для https://replicate.com/
 
-## Протестировать
-Можно по тут https://t.me/RogDocBot 
+
+
 
 
