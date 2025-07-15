@@ -30,6 +30,8 @@ BATCH_SIZE = 32
 
 # Telegram бот
 BOT_TOKEN = "Ваш API ключь для tg бота "
+# Можно поменять на True для тестирования
+TEST = False
 
 
 class SynonymExpander:
@@ -453,7 +455,7 @@ class ReplicateAnswerGenerator:
             return "Извините, произошла ошибка при генерации ответа."
 
 
-TEST = False
+
 # Инициализация компонентов
 db = DocumentDatabase()
 db.initialize_db()
