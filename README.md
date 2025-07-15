@@ -17,6 +17,9 @@ pip install -r requirements.txt
 в main.py установите свои токины:
 REPLICATE_API_TOKEN и BOT_TOKEN
 BOT_TOKEN для Tg бота
-REPLICATE_API_TOKEN для сервиса с моделью
+REPLICATE_API_TOKEN для [сервиса с моделью](https://replicate.com/)
+
+## Протестировать
+Можно по тут https://t.me/RogDocBot 
 
 
