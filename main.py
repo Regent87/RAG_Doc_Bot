@@ -1,5 +1,7 @@
 import os
 import re
+import time
+
 import numpy as np
 import sqlite3
 import replicate
@@ -12,12 +14,13 @@ import hashlib
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
 from sklearn.metrics.pairwise import cosine_similarity
-
+from typing import List, Optional
+from test_questions import questions1 as questions
 
 # Конфигурация
 DOCUMENTS_DIR = "documents"
 EMBEDDING_MODEL = "intfloat/multilingual-e5-large" #"sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-REPLICATE_API_TOKEN = "Ваш API ключ от replicate.com"
+REPLICATE_API_TOKEN = "Ваш API ключь для replicatr.com"
 INDEX_FILE = "faiss_index.index"
 DB_FILE = "documents.db"
 CHUNK_SIZE = 300
@@ -25,29 +28,79 @@ OVERLAP = 120
 MAX_DOCUMENTS = 1000
 BATCH_SIZE = 32
 
+# Telegram бот
+BOT_TOKEN = "Ваш API ключь для tg бота "
+
 
 class SynonymExpander:
-    def __init__(self, synonym_dict, model_name='intfloat/multilingual-e5-large'):
+    def __init__(
+            self,
+            synonym_dict: dict,
+            model_name: str = 'intfloat/multilingual-e5-large',
+            use_llama: bool = False,
+            llama_model: str = "meta/meta-llama-3-8b-instruct",
+            replicate_api_token: Optional[str] = None
+    ):
         self.model = SentenceTransformer(model_name)
         self.synonym_dict = synonym_dict
+        self.use_llama = use_llama
+        self.llama_model = llama_model
+        self.replicate_api_token = replicate_api_token
+
+        if self.use_llama and not self.replicate_api_token:
+            raise ValueError("Replicate API token is required when use_llama=True")
+
         self._prepare_embeddings()
 
-    def _prepare_embeddings(self):
-        """Кэшируем эмбеддинги всех ключей"""
+    def _prepare_embeddings(self) -> None:
+        """Кэшируем эмбеддинги всех ключей словаря"""
         self.keys = list(self.synonym_dict.keys())
         self.key_embeddings = self.model.encode(self.keys)
 
-    def find_closest_key(self, term, threshold=0.86):
-        """Находит ближайший ключ в словаре по эмбеддингу"""
+    def find_closest_key(self, term: str, threshold: float = 0.86) -> Optional[str]:
+        """Находит ближайший ключ в словаре по косинусной схожести эмбеддингов"""
         term_embedding = self.model.encode([term])
         similarities = cosine_similarity(term_embedding, self.key_embeddings)[0]
         max_idx = np.argmax(similarities)
-        if similarities[max_idx] > threshold:
-            return self.keys[max_idx]
-        return None
+        return self.keys[max_idx] if similarities[max_idx] > threshold else None
 
-    def expand_query(self, query):
-        """Заменяет термины на их синонимы из словаря"""
+    def _expand_with_llama(self, query: str) -> str:
+        """Расширяет запрос через Llama 3, используя Replicate API"""
+        try:
+            client = replicate.Client(api_token=self.replicate_api_token)
+
+            prompt = f"""
+            Расширь следующий технический запрос, добавив синонимы и варианты формулировок на Русском языке.
+            Запрос: "{query}"
+            Расширенный запрос должен сохранять исходный смысл, но включать альтернативные формулировки ключевых терминов.
+            Верни только расширенный запрос без пояснений.
+            Пример: "Как включить продув?" → "Как активировать (запустить/включить) режим продува (очистки)?"
+            Расширенный запрос:
+            """
+
+            output = client.run(
+                self.llama_model,
+                input={
+                    "prompt": prompt,
+                    "temperature": 0.7,
+                    "max_new_tokens": 100
+                }
+            )
+            return "".join(output).strip('"')
+
+        except Exception as e:
+            print(f"Ошибка Replicate API: {e}")
+            return query  # Возвращаем оригинальный запрос в случае ошибки
+
+    def expand_query(self, query: str) -> str:
+        """
+        Расширяет запрос двумя способами (на выбор):
+        1. Через заранее подготовленный словарь синонимов
+        2. Через LLM (Llama 3), если use_llama=True
+        """
+
+
+        # Оригинальный метод расширения через словарь
         expanded_terms = []
         for term in query.split():
             closest_key = self.find_closest_key(term)
@@ -57,7 +110,10 @@ class SynonymExpander:
                 expanded_terms.append(f"({' OR '.join(synonyms)})")
             else:
                 expanded_terms.append(term)
-        return ' '.join(expanded_terms)
+        if self.use_llama:
+            return self._expand_with_llama(' '.join(expanded_terms))
+        else:
+            return ' '.join(expanded_terms)
 
 class DocumentDatabase:
     def __init__(self):
@@ -71,7 +127,7 @@ class DocumentDatabase:
             #"rk-24svg": ["dantex 24", "модель 24svg", "серия svgi"],
             #"кнопка": ["клавиша", "переключатель", "сенсор", "кнопочный элемент"]
         }
-        self.expander = SynonymExpander(tech_synonyms)
+        self.expander = SynonymExpander(tech_synonyms,use_llama=True, replicate_api_token=REPLICATE_API_TOKEN)
 
     def initialize_db(self):
         """Инициализация базы данных SQLite"""
@@ -342,6 +398,21 @@ class DocumentDatabase:
             print(f"\n--- Чанк ID {chunk_id} ({len(chunk_text)} символов) ---")
             print(chunk_text[:] + "..." if len(chunk_text) > 200 else chunk_text)
 
+    def test_Rag(self, test_sp, generator):
+        for tema in test_sp:
+            print(tema)
+            for question in test_sp[tema]:
+                results = self.search(question)
+                if not results:
+                    print("Извините, я не нашел информации по вашему вопросу.")
+                else:
+                    answer = generator.generate_answer(question, results)
+                    doc_names = set(res['document'] for res in results)
+                    if doc_names:
+                        answer += f"\n\nИсточники: {', '.join(doc_names)}"
+                    print(answer)
+                time.sleep(0.01)
+
 
 class ReplicateAnswerGenerator:
     def __init__(self):
@@ -352,7 +423,7 @@ class ReplicateAnswerGenerator:
         context_str = "\n\n".join([f"Документ: {res['document']}\n{res['content']}" for res in context])
 
         prompt = f"""Ты - помощник по кондиционерам. Ответь на вопрос на Русском языке, используя предоставленную информацию. 
-        Представь ответ в виде пошаговой инструкции. Напиши все необходимые примечания.
+        При необходимости представь ответ в виде пошаговой инструкции. Напиши все необходимые примечания.
 Если ответа нет в информации, скажи, что не знаешь.
 
 Вопрос: {question}
@@ -382,6 +453,7 @@ class ReplicateAnswerGenerator:
             return "Извините, произошла ошибка при генерации ответа."
 
 
+TEST = False
 # Инициализация компонентов
 db = DocumentDatabase()
 db.initialize_db()
@@ -389,9 +461,12 @@ db.process_documents()
 db.generate_embeddings()
 db.load_index()
 generator = ReplicateAnswerGenerator()
+if TEST:
+    db.test_Rag(questions, generator)
+    exit()
+
 #db.print_chunks("dantex_vita.pdf")
-# Telegram бот
-BOT_TOKEN = "ваш API ключ от тг бота"
+
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -422,13 +497,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(BOT_TOKEN).build()
-
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
     print("Бот запущен...")
     app.run_polling()
-
 
 
 if __name__ == "__main__":
